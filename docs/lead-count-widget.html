@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Lead Count Widget</title>
+  <style>
+    /* Lightweight styling — change to match your site */
+    .scalex-widget {
+      max-width: 760px;
+      margin: 18px auto;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(16,24,40,0.06);
+      padding: 16px;
+    }
+    .scalex-header {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+      margin-bottom:8px;
+    }
+    .scalex-title { font-size:16px; font-weight:600; color:#0f172a; }
+    .scalex-controls { display:flex; gap:8px; align-items:center; }
+    .scalex-controls input[type="number"] { width:70px; padding:6px; border-radius:6px; border:1px solid #e6e9ef; }
+    .scalex-error { color:#b91c1c; margin-top:8px; font-size:13px; display:none; }
+    canvas { width:100% !important; height:320px !important; }
+  </style>
+</head>
+<body>
+  <div class="scalex-widget" id="scalex-lead-widget">
+    <div class="scalex-header">
+      <div class="scalex-title">Lead count — last <span id="scalex-days-label">7</span> days</div>
+      <div class="scalex-controls">
+        <label for="scalex-days">Days:</label>
+        <input id="scalex-days" type="number" min="1" max="365" value="7" />
+        <button id="scalex-refresh">Refresh</button>
+      </div>
+    </div>
+
+    <canvas id="scalex-leads-chart"></canvas>
+    <div class="scalex-error" id="scalex-error"></div>
+  </div>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <script>
+    (function () {
+      // ====== CONFIGURE THIS: your Cloud Run URL ======
+      const SERVICE_URL = "https://scalex-adapter-268453003438.europe-west1.run.app";
+      // =================================================
+
+      const daysInput = document.getElementById('scalex-days');
+      const daysLabel = document.getElementById('scalex-days-label');
+      const refreshBtn = document.getElementById('scalex-refresh');
+      const errorEl = document.getElementById('scalex-error');
+      const ctx = document.getElementById('scalex-leads-chart').getContext('2d');
+
+      // Chart instance
+      let chart;
+
+      async function fetchLeadCount(days = 7) {
+        const url = new URL(`${SERVICE_URL}/chart-data`);
+        url.searchParams.set('chart', 'lead_count');
+        url.searchParams.set('days', String(days));
+
+        const resp = await fetch(url.toString(), { method: 'GET' });
+        if (!resp.ok) {
+          const text = await resp.text();
+          throw new Error(`HTTP ${resp.status}: ${text}`);
+        }
+        const body = await resp.json();
+        return body.rows || [];
+      }
+
+      // BigQuery day formats can show nested object {value: "YYYY-MM-DD"} or just a string.
+      function normalizeRows(rows) {
+        // rows: [{ day: { value: "2025-12-03" } , leads: "8" }, ...]
+        return rows.map(r => {
+          let day = r.day;
+          if (day && typeof day === 'object' && day.value) {
+            day = day.value;
+          } else if (day && typeof day === 'object') {
+            // some BigQuery JSONs return {value: {seconds:..., nanos:...}} – handle minimally
+            day = day.value || day;
+          }
+          // ensure day is a string
+          day = String(day);
+          const leads = Number(r.leads || r.leads === 0 ? r.leads : 0);
+          return { day, leads };
+        })
+        .sort((a,b) => a.day.localeCompare(b.day));
+      }
+
+      function renderChart(data) {
+        const labels = data.map(d => d.day);
+        const values = data.map(d => d.leads);
+
+        const cfg = {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Leads',
+              data: values,
+              tension: 0.25,
+              fill: true,
+              // Leave colors to the page stylesheet; Chart.js will use defaults
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: { display: false }
+            },
+            scales: {
+              x: { display: true, title: { display: false } },
+              y: { beginAtZero: true, title: { display: true, text: 'Leads' } }
+            }
+          }
+        };
+
+        if (chart) {
+          chart.data.labels = labels;
+          chart.data.datasets[0].data = values;
+          chart.update();
+        } else {
+          chart = new Chart(ctx, cfg);
+        }
+      }
+
+      async function loadAndRender(days) {
+        errorEl.style.display = 'none';
+        try {
+          const rows = await fetchLeadCount(days);
+          const norm = normalizeRows(rows);
+          renderChart(norm);
+          daysLabel.textContent = String(days);
+        } catch (err) {
+          console.error('Fetch error', err);
+          errorEl.textContent = 'Error loading data: ' + err.message;
+          errorEl.style.display = 'block';
+        }
+      }
+
+      // initial load
+      loadAndRender(Number(daysInput.value || 7));
+
+      // refresh button
+      refreshBtn.addEventListener('click', () => {
+        const d = Number(daysInput.value || 7);
+        if (d < 1 || d > 365) {
+          errorEl.textContent = 'Days must be between 1 and 365';
+          errorEl.style.display = 'block';
+          return;
+        }
+        loadAndRender(d);
+      });
+
+      // allow pressing Enter in the input to refresh
+      daysInput.addEventListener('keyup', (ev) => {
+        if (ev.key === 'Enter') refreshBtn.click();
+      });
+    })();
+  </script>
+</body>
+</html>
