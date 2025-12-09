@@ -1,0 +1,262 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ScaleX Marketing Dashboard</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; background:#f6f8fb; padding:18px; }
+    .container { max-width:1100px; margin:0 auto; }
+    .row { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
+    .card { background:#fff; border-radius:10px; padding:12px; box-shadow:0 8px 24px rgba(16,24,40,0.04); flex:1 1 340px; min-width:320px; }
+    .card h3 { margin:0 0 8px 0; font-size:15px; color:#0f172a; }
+    .controls { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    input[type=number]{ width:80px; padding:6px; border-radius:6px; border:1px solid #e6e9ef; }
+    canvas { width:100% !important; height:260px !important; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #f1f4f8; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>ScaleX — Marketing Dashboard</h1>
+    <div class="controls" style="margin-bottom:12px;">
+      <label>Days: <input id="days" type="number" value="30" min="1" max="365" /></label>
+      <button id="refreshAll">Refresh</button>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <h3>Lead Count (Daily)</h3>
+        <canvas id="chart-lead-count"></canvas>
+      </div>
+
+      <div class="card">
+        <h3>Sessions Over Time (Daily)</h3>
+        <canvas id="chart-sessions-over-time"></canvas>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <h3>Sessions by Channel</h3>
+        <canvas id="chart-sessions-by-channel"></canvas>
+      </div>
+
+      <div class="card">
+        <h3>Leads by Campaign (Top)</h3>
+        <canvas id="chart-leads-by-campaign"></canvas>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <h3>Source / Medium (Top)</h3>
+        <canvas id="chart-source-medium-pie"></canvas>
+      </div>
+
+      <div class="card">
+        <h3>Top Landing Pages</h3>
+        <table id="table-top-landing-pages">
+          <thead><tr><th>Landing Page</th><th>Sessions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script>
+  (function () {
+    // ===== CONFIGURE this =====
+    const SERVICE_URL = "https://scalex-adapter-268453003438.europe-west1.run.app";
+    // ===========================
+    const daysInput = document.getElementById('days');
+    const refreshBtn = document.getElementById('refreshAll');
+
+    // Chart instances
+    const charts = {
+      lead_count: null,
+      sessions_over_time: null,
+      sessions_by_channel: null,
+      leads_by_campaign: null,
+      source_medium_pie: null
+    };
+
+    // helper to fetch chart data
+    async function fetchChart(chartName, params = {}) {
+      const url = new URL(`${SERVICE_URL}/chart-data`);
+      url.searchParams.set('chart', chartName);
+      if (params.days) url.searchParams.set('days', String(params.days));
+      if (params.limit) url.searchParams.set('limit', String(params.limit));
+      const resp = await fetch(url.toString());
+      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' - ' + await resp.text());
+      return await resp.json();
+    }
+
+    // normalizers: convert BigQuery row shapes to {label,value} arrays or time series
+    function normalizeTimeRows(rows, valueKey = 'sessionsOrLeads') {
+      // rows with day field; day might be {value:"YYYY-MM-DD"} or a string
+      const arr = (rows || []).map(r => {
+        let day = r.day;
+        if (day && typeof day === 'object' && day.value) day = day.value;
+        day = String(day);
+        // find numeric value field (leads/sessions) - try r.leads or r.sessions or generic numeric entries
+        const v = Number(r.leads ?? r.sessions ?? r.value ?? 0);
+        return { day, value: v };
+      }).sort((a,b) => a.day.localeCompare(b.day));
+      return arr;
+    }
+
+    function normalizeKeyValue(rows, keyName, valueName) {
+      return (rows || []).map(r => {
+        const key = r[keyName] ?? r.label ?? r.campaign ?? r.utm_source ?? '(unknown)';
+        const val = Number(r[valueName] ?? r.sessions ?? r.leads ?? r.value ?? 0);
+        return { key: String(key), value: val };
+      });
+    }
+
+    // renderers for each chart
+    function renderLineChart(canvasId, dataArr, labelName) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      const labels = dataArr.map(d => d.day);
+      const data = dataArr.map(d => d.value);
+      const cfg = {
+        type: 'line',
+        data: { labels, datasets: [{ label: labelName, data, tension: 0.2, fill: true }] },
+        options: { responsive:true, plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true } } }
+      };
+      if (charts[canvasId]) {
+        charts[canvasId].data.labels = labels;
+        charts[canvasId].data.datasets[0].data = data;
+        charts[canvasId].update();
+        return charts[canvasId];
+      }
+      charts[canvasId] = new Chart(ctx, cfg);
+      return charts[canvasId];
+    }
+
+    function renderBarChart(canvasId, kvArr, labelName) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      const labels = kvArr.map(d=>d.key);
+      const data = kvArr.map(d=>d.value);
+      const cfg = {
+        type: 'bar',
+        data: { labels, datasets: [{ label: labelName, data }] },
+        options: { indexAxis:'y', responsive:true, plugins:{legend:{display:false}}, scales:{ x:{ beginAtZero:true } } }
+      };
+      if (charts[canvasId]) {
+        charts[canvasId].data.labels = labels;
+        charts[canvasId].data.datasets[0].data = data;
+        charts[canvasId].update();
+        return charts[canvasId];
+      }
+      charts[canvasId] = new Chart(ctx, cfg);
+      return charts[canvasId];
+    }
+
+    function renderPieChart(canvasId, kvArr) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      const labels = kvArr.map(d=>d.key);
+      const data = kvArr.map(d=>d.value);
+      const cfg = {
+        type: 'pie',
+        data: { labels, datasets:[{ data }] },
+        options: { responsive:true, plugins:{legend:{position:'right'}} }
+      };
+      if (charts[canvasId]) {
+        charts[canvasId].data.labels = labels;
+        charts[canvasId].data.datasets[0].data = data;
+        charts[canvasId].update();
+        return charts[canvasId];
+      }
+      charts[canvasId] = new Chart(ctx, cfg);
+      return charts[canvasId];
+    }
+
+    // specific loaders
+    async function loadLeadCount(days) {
+      const body = await fetchChart('lead_count', { days });
+      const arr = normalizeTimeRows(body.rows).map(r => ({ day: r.day, value: r.value ?? r.leads }));
+      renderLineChart('chart-lead-count', arr, 'Leads');
+    }
+
+    async function loadSessionsOverTime(days) {
+      const body = await fetchChart('sessions_over_time', { days });
+      const arr = normalizeTimeRows(body.rows).map(r => ({ day: r.day, value: r.value ?? r.sessions }));
+      renderLineChart('chart-sessions-over-time', arr, 'Sessions');
+    }
+
+    async function loadSessionsByChannel(days) {
+      const body = await fetchChart('sessions_by_channel', { days });
+      // rows contain channel and sessions
+      const k = (body.rows || []).map(r => {
+        // some rows may have 'channel' or utm_source/utm_medium pair
+        const channel = r.channel ?? ( (r.utm_source||'(direct)') + ' / ' + (r.utm_medium||'(direct)') );
+        const val = Number(r.sessions ?? r.value ?? 0);
+        return { key: channel, value: val };
+      }).slice(0,20);
+      renderBarChart('chart-sessions-by-channel', k, 'Sessions');
+    }
+
+    async function loadLeadsByCampaign(days) {
+      const body = await fetchChart('leads_by_campaign', { days });
+      const k = normalizeKeyValue(body.rows, 'campaign', 'leads').slice(0,20);
+      renderBarChart('chart-leads-by-campaign', k, 'Leads');
+    }
+
+    async function loadSourceMediumPie(days) {
+      const body = await fetchChart('source_medium_pie', { days });
+      const k = normalizeKeyValue(body.rows, 'label', 'value').slice(0,20);
+      renderPieChart('chart-source-medium-pie', k);
+    }
+
+    async function loadTopLandingPages(days) {
+      const body = await fetchChart('top_landing_pages', { days, limit: 10 });
+      const rows = (body.rows || []).map(r => {
+        const lp = r.landing_page ?? r.page ?? '(unknown)';
+        const sessions = Number(r.sessions ?? r.value ?? 0);
+        return { landing_page: String(lp), sessions };
+      });
+      const tbody = document.querySelector('#table-top-landing-pages tbody');
+      tbody.innerHTML = '';
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        const a = document.createElement('a');
+        a.href = r.landing_page.startsWith('http') ? r.landing_page : '#';
+        a.textContent = r.landing_page;
+        const td1 = document.createElement('td');
+        td1.appendChild(a);
+        const td2 = document.createElement('td');
+        td2.textContent = r.sessions;
+        tr.appendChild(td1); tr.appendChild(td2);
+        tbody.appendChild(tr);
+      });
+    }
+
+    // top-level refresh
+    async function refreshAll() {
+      const days = Number(daysInput.value || 30);
+      try {
+        await Promise.all([
+          loadLeadCount(days),
+          loadSessionsOverTime(days),
+          loadSessionsByChannel(days),
+          loadLeadsByCampaign(days),
+          loadSourceMediumPie(days),
+          loadTopLandingPages(days)
+        ]);
+      } catch (err) {
+        console.error('Error loading charts', err);
+        alert('Error loading charts: ' + err.message);
+      }
+    }
+
+    refreshBtn.addEventListener('click', refreshAll);
+
+    // initial load
+    refreshAll();
+
+  })();
+  </script>
+</body>
+</html>
