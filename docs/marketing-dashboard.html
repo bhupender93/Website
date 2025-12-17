@@ -18,69 +18,30 @@
   <script src="https://d3js.org/d3-scale-chromatic.v1.min.js"></script>
 
   <style>
-    body {
-      font-family: system-ui, Arial;
-      background:#f6f8fb;
-      padding:25px;
-    }
+    body { font-family: system-ui, Arial; background:#f6f8fb; padding:25px; }
+    h1 { margin-bottom:10px; }
+    .container { max-width:1250px; margin:auto; }
 
-    h1 { margin-bottom: 10px; }
-    .container { max-width: 1250px; margin: auto; }
+    .controls { display:flex; gap:12px; align-items:center; margin-bottom:25px; }
 
-    .controls {
-      display:flex;
-      gap:10px;
-      align-items:center;
-      margin-bottom:20px;
-    }
-
-    input {
+    input, select {
       padding:6px;
       border-radius:6px;
       border:1px solid #ccc;
     }
 
-    .row {
-      display:flex;
-      flex-wrap:wrap;
-      gap:20px;
-      margin-bottom:25px;
-    }
+    .row { display:flex; flex-wrap:wrap; gap:20px; margin-bottom:30px; }
 
     .card {
       background:white;
       border-radius:10px;
       padding:15px;
-      box-shadow:0 6px 18px rgba(16,24,40,0.06);
       flex:1 1 380px;
       min-width:360px;
+      box-shadow:0 6px 18px rgba(16,24,40,0.06);
     }
 
-    canvas {
-      width:100% !important;
-      height:300px !important;
-    }
-
-    table {
-      width:100%;
-      border-collapse:collapse;
-      font-size:14px;
-    }
-    th, td {
-      padding:8px;
-      border-bottom:1px solid #eee;
-    }
-
-    /* Heatmap */
-    .heatmap text {
-      font-size:12px;
-      fill:black;
-    }
-
-    #chordChart, #sankeyChart, #heatmapChart {
-      width:100%;
-      height:400px;
-    }
+    canvas { width:100% !important; height:300px !important; }
   </style>
 </head>
 
@@ -90,21 +51,41 @@
   <h1>ScaleX Marketing Dashboard</h1>
 
   <div class="controls">
-    <label>Days: <input id="days" type="number" min="1" max="365" value="30" /></label>
+    <label>Start: <input type="date" id="startDate"></label>
+    <label>End: <input type="date" id="endDate"></label>
+
+    <label>Device:
+      <select id="deviceFilter">
+        <option value="all">All</option>
+        <option value="mobile">Mobile</option>
+        <option value="desktop">Desktop</option>
+      </select>
+    </label>
+
+    <label>Region:
+      <input type="text" id="regionFilter" placeholder="e.g., IN">
+    </label>
+
+    <label>Channel Filter:
+      <input type="text" id="channelFilter" placeholder="comma-separated e.g., google,meta">
+    </label>
+
     <button id="refreshAll">Refresh</button>
   </div>
 
-  <!-- EXISTING CHARTS -->
+  <!-- ROW 1 -->
   <div class="row">
     <div class="card"><h3>Lead Count</h3><canvas id="leadCount"></canvas></div>
     <div class="card"><h3>Sessions Over Time</h3><canvas id="sessionsOverTime"></canvas></div>
   </div>
 
+  <!-- ROW 2 -->
   <div class="row">
     <div class="card"><h3>Sessions by Channel</h3><canvas id="sessionsByChannel"></canvas></div>
     <div class="card"><h3>Leads by Campaign</h3><canvas id="leadsByCampaign"></canvas></div>
   </div>
 
+  <!-- ROW 3 -->
   <div class="row">
     <div class="card"><h3>Source / Medium Mix</h3><canvas id="sourceMediumPie"></canvas></div>
     <div class="card">
@@ -116,25 +97,27 @@
     </div>
   </div>
 
-  <!-- NEW MULTICHANNEL CHARTS -->
-  <h2 style="margin-top:40px;">Advanced Multi-Channel Behaviour</h2>
+  <h2 style="margin-top:40px;">Multi-Channel Behaviour</h2>
 
+  <!-- HEATMAP -->
   <div class="row">
-    <div class="card" style="min-width:500px;">
+    <div class="card" style="min-width:550px;">
       <h3>Audience Overlap (Heatmap)</h3>
       <div id="heatmapChart"></div>
     </div>
   </div>
 
+  <!-- SANKEY -->
   <div class="row">
-    <div class="card" style="min-width:500px;">
+    <div class="card" style="min-width:550px;">
       <h3>First-Touch → Lead-Touch Flow (Sankey)</h3>
       <svg id="sankeyChart" width="600" height="450"></svg>
     </div>
   </div>
 
+  <!-- CHORD -->
   <div class="row">
-    <div class="card" style="min-width:500px;">
+    <div class="card" style="min-width:550px;">
       <h3>Channel Assist Score (Chord Diagram)</h3>
       <svg id="chordChart" width="550" height="550"></svg>
     </div>
@@ -142,252 +125,350 @@
 
 </div>
 
+
 <script>
+
 const API = "https://scalex-adapter-268453003438.europe-west1.run.app";
 
-// --------------- Helper Fetch ------------------
-async function fetchChart(chart, days=30) {
-  const url = `${API}/chart-data?chart=${chart}&days=${days}`;
-  const r = await fetch(url);
-  const j = await r.json();
-  return j.rows || [];
+
+// -----------------------------------------
+// 🧠 Helper — Build POST Request Payload
+// -----------------------------------------
+function buildPayload(chartName) {
+  const start = document.getElementById("startDate").value;
+  const end = document.getElementById("endDate").value;
+
+  const device = document.getElementById("deviceFilter").value;
+  const region = document.getElementById("regionFilter").value;
+  const channelCSV = document.getElementById("channelFilter").value.trim();
+
+  const filters = {
+    device: device,
+    region: region || null,
+    channel: channelCSV ? channelCSV.split(",").map(s => s.trim()) : null
+  };
+
+  return {
+    chartName,
+    dateRange: {
+      startDate: start,
+      endDate: end
+    },
+    comparison: false,
+    filters,
+    timestamp: new Date().toISOString()
+  };
 }
 
-// --------------- EXISTING CHARTS (Chart.js) ------------------
+
+// -----------------------------------------
+// 🧠 Helper — POST to Backend
+// -----------------------------------------
+async function fetchChart(chartName) {
+  const payload = buildPayload(chartName);
+
+  const res = await fetch(`${API}/chart-data`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload)
+  });
+
+  const json = await res.json();
+  return json.data ? json.data.primary : [];
+}
+
+
+// -----------------------------------------
+// 🟦 Chart.js — Time Series Helper
+// -----------------------------------------
 function normalizeDay(d) {
   if (!d) return "";
   if (typeof d === "object" && d.value) return d.value;
   return d;
 }
 
-let line1, line2, bar1, bar2, pie1;
+let leadChart, sessionsChart, bar1, bar2, pieChart;
 
-async function loadLeadCount(days){
-  let rows = await fetchChart("lead_count", days);
-  rows = rows.map(r => ({day: normalizeDay(r.day), value: r.leads}));
+
+// -----------------------------------------
+// 1️⃣ Lead Count
+// -----------------------------------------
+async function loadLeadCount(){
+  const rows = await fetchChart("lead_count");
+  const data = rows.map(r => ({day: normalizeDay(r.day), value: r.leads}));
 
   const ctx = document.getElementById("leadCount");
-  if (line1) line1.destroy();
-  line1 = new Chart(ctx, {
+  if (leadChart) leadChart.destroy();
+
+  leadChart = new Chart(ctx, {
     type:"line",
-    data:{ labels:rows.map(r=>r.day), datasets:[{label:"Leads", data:rows.map(r=>r.value), fill:true}]}
+    data:{ labels:data.map(r=>r.day),
+           datasets:[{label:"Leads", data:data.map(r=>r.value), fill:true}] }
   });
 }
 
-async function loadSessionsOverTime(days){
-  let rows = await fetchChart("sessions_over_time", days);
-  rows = rows.map(r => ({day: normalizeDay(r.day), value: r.sessions}));
+
+// -----------------------------------------
+// 2️⃣ Sessions Over Time
+// -----------------------------------------
+async function loadSessionsOverTime(){
+  const rows = await fetchChart("sessions_over_time");
+
+  const data = rows.map(r => ({day: normalizeDay(r.day), value: r.sessions}));
 
   const ctx = document.getElementById("sessionsOverTime");
-  if (line2) line2.destroy();
-  line2 = new Chart(ctx, {
+  if (sessionsChart) sessionsChart.destroy();
+
+  sessionsChart = new Chart(ctx, {
     type:"line",
-    data:{ labels:rows.map(r=>r.day), datasets:[{label:"Sessions", data:rows.map(r=>r.value)}] }
+    data:{ labels:data.map(r=>r.day),
+           datasets:[{label:"Sessions", data:data.map(r=>r.value)}] }
   });
 }
 
-async function loadSessionsByChannel(days){
-  let rows = await fetchChart("sessions_by_channel", days);
-  rows = rows.map(r => ({key:r.channel, value:r.sessions}));
+
+// -----------------------------------------
+// 3️⃣ Sessions by Channel
+// -----------------------------------------
+async function loadSessionsByChannel(){
+  const rows = await fetchChart("sessions_by_channel");
+
+  const data = rows.map(r => ({key:r.channel, value:r.sessions}));
 
   const ctx = document.getElementById("sessionsByChannel");
   if (bar1) bar1.destroy();
+
   bar1 = new Chart(ctx, {
     type:"bar",
-    data:{ labels:rows.map(r=>r.key), datasets:[{data:rows.map(r=>r.value)}] },
+    data:{ labels:data.map(r=>r.key),
+           datasets:[{data:data.map(r=>r.value)}] },
     options:{ indexAxis:"y" }
   });
 }
 
-async function loadLeadsByCampaign(days){
-  let rows = await fetchChart("leads_by_campaign", days);
-  rows = rows.map(r => ({key:r.campaign, value:r.leads}));
+
+// -----------------------------------------
+// 4️⃣ Leads by Campaign
+// -----------------------------------------
+async function loadLeadsByCampaign(){
+  const rows = await fetchChart("leads_by_campaign");
+
+  const data = rows.map(r => ({key:r.campaign, value:r.leads}));
 
   const ctx = document.getElementById("leadsByCampaign");
   if (bar2) bar2.destroy();
+
   bar2 = new Chart(ctx, {
     type:"bar",
-    data:{ labels:rows.map(r=>r.key), datasets:[{data:rows.map(r=>r.value)}] },
+    data:{ labels:data.map(r=>r.key),
+           datasets:[{data:data.map(r=>r.value)}] },
     options:{ indexAxis:"y" }
   });
 }
 
-async function loadSourceMediumPie(days){
-  let rows = await fetchChart("source_medium_pie", days);
+
+// -----------------------------------------
+// 5️⃣ Source / Medium Pie
+// -----------------------------------------
+async function loadSourceMediumPie() {
+  const rows = await fetchChart("source_medium_pie");
+
   const ctx = document.getElementById("sourceMediumPie");
-  if (pie1) pie1.destroy();
-  pie1 = new Chart(ctx, {
-    type:"pie",
-    data:{ labels:rows.map(r=>r.label), datasets:[{data:rows.map(r=>r.value)}]}
+  if (pieChart) pieChart.destroy();
+
+  pieChart = new Chart(ctx, {
+    type: "pie",
+    data: {
+      labels: rows.map(r => r.label),
+      datasets: [{ data: rows.map(r => r.value) }]
+    }
   });
 }
 
-async function loadTopLandingPages(days){
-  let rows = await fetchChart("top_landing_pages", days);
-  let body = document.getElementById("landingPagesBody");
+
+// -----------------------------------------
+// 6️⃣ Top Landing Pages
+// -----------------------------------------
+async function loadTopLandingPages(){
+  const rows = await fetchChart("top_landing_pages");
+
+  const body = document.getElementById("landingPagesBody");
   body.innerHTML = "";
-  rows.forEach(r => {
-    let tr = document.createElement("tr");
+
+  rows.forEach(r=>{
+    const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.landing_page}</td><td>${r.sessions}</td>`;
     body.appendChild(tr);
   });
 }
 
-// ----------------- NEW MULTICHANNEL VISUALS ----------------------
 
-// ----------------- 1. AUDIENCE OVERLAP HEATMAP -------------------
-async function loadAudienceOverlap(days){
-  const data = await fetchChart("audience_overlap", days);
+// -----------------------------------------------------------
+// ADVANCED MULTI-CHANNEL CHARTS
+// -----------------------------------------------------------
 
-  const channels = [...new Set(data.map(d=>d.channel_a).concat(data.map(d=>d.channel_b)))];
 
-  const matrix = channels.map(a =>
-    channels.map(b => {
-      const row = data.find(d=>d.channel_a===a && d.channel_b===b);
-      return row ? row.users : 0;
-    })
-  );
+// -----------------------------------------
+// 🔥 7️⃣ Audience Overlap Heatmap
+// -----------------------------------------
+async function loadAudienceOverlap() {
+  const rows = await fetchChart("audience_overlap");
 
   const container = d3.select("#heatmapChart");
   container.selectAll("*").remove();
 
-  const width = 450, height = 450;
-  const svg = container.append("svg").attr("width",width).attr("height",height);
+  const channels = [...new Set(rows.flatMap(r => [r.channel_a, r.channel_b]))];
+  const size = channels.length;
 
-  const gridSize = Math.floor(width / channels.length);
+  const matrix = Array.from({length:size}, (_,i) =>
+    Array.from({length:size}, (_,j) => {
+      const hit = rows.find(r => r.channel_a === channels[i] && r.channel_b === channels[j]);
+      return hit ? hit.users : 0;
+    })
+  );
+
+  const width = 500, height = 500;
+  const grid = width / size;
+
+  const svg = container.append("svg")
+    .attr("width", width + 120)
+    .attr("height", height + 120)
+    .append("g")
+    .attr("transform", "translate(80,40)");
 
   const color = d3.scaleSequential(d3.interpolateOrRd)
     .domain([0, d3.max(matrix.flat())]);
 
+  // Labels
   channels.forEach((ch,i)=>{
     svg.append("text")
-      .attr("x", i*gridSize + gridSize/2)
-      .attr("y", 10)
+      .attr("x", i * grid + grid/2)
+      .attr("y", -5)
       .attr("text-anchor","middle")
       .text(ch);
+
     svg.append("text")
-      .attr("x", 0)
-      .attr("y", i*gridSize + gridSize/2 + 10)
+      .attr("x", -5)
+      .attr("y", i * grid + grid/2)
+      .attr("text-anchor","end")
+      .attr("dominant-baseline","middle")
       .text(ch);
   });
 
+  // Cells
   matrix.forEach((row,i)=>{
     row.forEach((val,j)=>{
       svg.append("rect")
-        .attr("x", j*gridSize)
-        .attr("y", i*gridSize + 15)
-        .attr("width", gridSize-2)
-        .attr("height", gridSize-2)
+        .attr("x", j*grid)
+        .attr("y", i*grid)
+        .attr("width", grid)
+        .attr("height", grid)
         .attr("fill", color(val));
 
       svg.append("text")
-        .attr("x", j*gridSize + gridSize/2)
-        .attr("y", i*gridSize + gridSize/2 + 15)
+        .attr("x", j*grid + grid/2)
+        .attr("y", i*grid + grid/2)
         .attr("text-anchor","middle")
+        .attr("dominant-baseline","middle")
         .attr("fill","black")
         .text(val);
     });
   });
 }
 
-// ----------------- 2. FIRST → LEAD SANKEY -------------------------
-async function loadSankey(days){
-  const rows = await fetchChart("first_to_last_touch", days);
+
+// -----------------------------------------
+// 🔥 8️⃣ First-Touch → Lead-Touch Sankey
+// -----------------------------------------
+async function loadSankey() {
+  const rows = await fetchChart("first_to_last_touch");
 
   const nodes = {};
-  const links = [];
-
-  rows.forEach(r=>{
-    if (!nodes[r.first_channel]) nodes[r.first_channel] = {name:r.first_channel};
-    if (!nodes[r.lead_channel]) nodes[r.lead_channel] = {name:r.lead_channel};
-
-    links.push({
-      source: r.first_channel,
-      target: r.lead_channel,
-      value: r.users
-    });
+  rows.forEach(r => {
+    nodes[r.first_channel] = 1;
+    nodes[r.lead_channel] = 1;
   });
 
-  const nodeList = Object.values(nodes);
+  const nodeList = Object.keys(nodes).map(name => ({ name }));
+  const index = Object.fromEntries(nodeList.map((n,i)=>[n.name,i]));
 
-  // Convert node names → index
-  const nodeIndex = {};
-  nodeList.forEach((n,i)=> nodeIndex[n.name] = i);
-
-  const sankeyLinks = links.map(l=>({
-    source: nodeIndex[l.source],
-    target: nodeIndex[l.target],
-    value: l.value
+  const links = rows.map(r => ({
+    source: index[r.first_channel],
+    target: index[r.lead_channel],
+    value: r.users
   }));
 
-  d3.select("#sankeyChart").selectAll("*").remove();
+  const svg = d3.select("#sankeyChart");
+  svg.selectAll("*").remove();
 
   const width = 600, height = 450;
-  const svg = d3.select("#sankeyChart");
 
   const sankey = d3.sankey()
-      .nodeWidth(20)
-      .nodePadding(20)
-      .extent([[1, 1], [width-1, height-5]]);
+    .nodeWidth(20)
+    .nodePadding(20)
+    .extent([[1,1], [width-1, height-5]]);
 
   const graph = sankey({
-    nodes: nodeList.map(d=>Object.assign({},d)),
-    links: sankeyLinks
+    nodes: nodeList.map(n => ({...n})),
+    links
   });
 
   svg.append("g")
     .selectAll("rect")
     .data(graph.nodes)
     .join("rect")
-      .attr("x", d=>d.x0)
-      .attr("y", d=>d.y0)
-      .attr("height", d=>d.y1-d.y0)
-      .attr("width", d=>d.x1-d.x0)
-      .attr("fill","steelblue");
+    .attr("x", d=>d.x0)
+    .attr("y", d=>d.y0)
+    .attr("height", d=>d.y1-d.y0)
+    .attr("width", d=>d.x1-d.x0)
+    .attr("fill","steelblue");
 
   svg.append("g")
     .selectAll("path")
     .data(graph.links)
     .join("path")
-      .attr("d", d3.sankeyLinkHorizontal())
-      .attr("stroke", "#999")
-      .attr("stroke-width", d=>Math.max(1, d.width))
-      .attr("fill","none");
+    .attr("d", d3.sankeyLinkHorizontal())
+    .attr("stroke","#aaa")
+    .attr("stroke-width", d=>Math.max(1,d.width))
+    .attr("fill","none");
 
   svg.append("g")
     .selectAll("text")
     .data(graph.nodes)
     .join("text")
-      .attr("x", d=>d.x0 < width/2 ? d.x1+6 : d.x0-6)
-      .attr("y", d=> (d.y1+d.y0)/2 )
-      .attr("dy","0.35em")
-      .attr("text-anchor", d=>d.x0 < width/2 ? "start":"end")
-      .text(d=>d.name);
+    .attr("x", d => d.x0 < width/2 ? d.x1 + 6 : d.x0 - 6)
+    .attr("y", d => (d.y0 + d.y1) / 2)
+    .attr("dy","0.35em")
+    .attr("text-anchor", d => d.x0 < width/2 ? "start" : "end")
+    .text(d => d.name);
 }
 
-// ----------------- 3. CHANNEL ASSIST CHORD -------------------------
-async function loadChord(days){
-  const rows = await fetchChart("channel_assists", days);
 
-  const channels = [...new Set(rows.flatMap(r=>[r.assist_channel, r.conversion_channel]))];
+// -----------------------------------------
+// 🔥 9️⃣ Channel Assist Chord Diagram
+// -----------------------------------------
+async function loadChord() {
+  const rows = await fetchChart("channel_assists");
 
-  const index = {};
-  channels.forEach((c,i)=> index[c]=i);
+  const channels = [...new Set(rows.flatMap(r => [r.assist_channel, r.conversion_channel]))];
 
-  const matrix = Array.from({length:channels.length},
-    ()=> Array(channels.length).fill(0));
+  const size = channels.length;
+  const index = Object.fromEntries(channels.map((c,i)=>[c,i]));
 
-  rows.forEach(r=>{
+  const matrix = Array.from({length:size}, ()=>Array(size).fill(0));
+
+  rows.forEach(r => {
     matrix[index[r.assist_channel]][index[r.conversion_channel]] = r.assists;
   });
 
   const width = 550, height = 550;
-  const outerRadius = width/2 - 40;
+  const outerRadius = width/2 - 30;
   const innerRadius = outerRadius - 20;
 
-  d3.select("#chordChart").selectAll("*").remove();
+  const svg = d3.select("#chordChart");
+  svg.selectAll("*").remove();
 
-  const svg = d3.select("#chordChart")
+  const g = svg
     .attr("viewBox",[0,0,width,height])
     .append("g")
     .attr("transform",`translate(${width/2},${height/2})`);
@@ -397,58 +478,66 @@ async function loadChord(days){
 
   const color = d3.scaleOrdinal(d3.schemeTableau10);
 
-  svg.append("g")
-    .selectAll("g")
+  g.append("g")
+    .selectAll("path")
     .data(arcs.groups)
-    .join("g")
-      .append("path")
-      .attr("fill", d=>color(d.index))
-      .attr("d", d3.arc().innerRadius(innerRadius).outerRadius(outerRadius));
+    .join("path")
+    .attr("fill", d=>color(d.index))
+    .attr("d", d3.arc().innerRadius(innerRadius).outerRadius(outerRadius));
 
-  svg.append("g")
+  g.append("g")
     .selectAll("text")
     .data(arcs.groups)
     .join("text")
-      .attr("transform", d=>{
-        const angle = (d.startAngle + d.endAngle)/2;
-        return `rotate(${angle*180/Math.PI - 90}) translate(${outerRadius+5})`;
-      })
-      .attr("dy","0.35em")
-      .attr("text-anchor","start")
-      .text(d=>channels[d.index]);
+    .attr("transform", d=>{
+      const a = (d.startAngle + d.endAngle)/2;
+      return `rotate(${a*180/Math.PI - 90}) translate(${outerRadius + 5})`;
+    })
+    .attr("dy","0.35em")
+    .attr("text-anchor","start")
+    .text(d => channels[d.index]);
 
-  svg.append("g")
+  g.append("g")
     .attr("fill-opacity",0.7)
     .selectAll("path")
     .data(arcs)
     .join("path")
-      .attr("d", d3.ribbon().radius(innerRadius))
-      .attr("fill", d=>color(d.target.index))
-      .attr("stroke", "#333");
+    .attr("d", d3.ribbon().radius(innerRadius))
+    .attr("fill", d=>color(d.target.index))
+    .attr("stroke","#333");
 }
 
-// ----------------- LOAD EVERYTHING -------------------------------
-async function refreshAllCharts(){
-  const days = Number(document.getElementById("days").value);
 
+// -----------------------------------------
+// 🔄 REFRESH ALL
+// -----------------------------------------
+async function refreshDashboard() {
   await Promise.all([
-    loadLeadCount(days),
-    loadSessionsOverTime(days),
-    loadSessionsByChannel(days),
-    loadLeadsByCampaign(days),
-    loadSourceMediumPie(days),
-    loadTopLandingPages(days),
-    loadAudienceOverlap(days),
-    loadSankey(days),
-    loadChord(days)
+    loadLeadCount(),
+    loadSessionsOverTime(),
+    loadSessionsByChannel(),
+    loadLeadsByCampaign(),
+    loadSourceMediumPie(),
+    loadTopLandingPages(),
+    loadAudienceOverlap(),
+    loadSankey(),
+    loadChord()
   ]);
 }
 
-document.getElementById("refreshAll").addEventListener("click", refreshAllCharts);
+document.getElementById("refreshAll").addEventListener("click", refreshDashboard);
 
-// initial load
-refreshAllCharts();
+// Auto-fill default date range (last 30 days)
+(function initDates() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 30);
 
+  document.getElementById("startDate").value = start.toISOString().slice(0,10);
+  document.getElementById("endDate").value = end.toISOString().slice(0,10);
+
+  refreshDashboard();
+})();
 </script>
 
 </body>
