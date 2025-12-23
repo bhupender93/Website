@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ScaleX API Tester</title>
+<style>
+    body {
+        background: #0f172a;
+        color: #e2e8f0;
+        font-family: Arial, sans-serif;
+        padding: 20px;
+    }
+    h1 {
+        margin-bottom: 20px;
+        color: #38bdf8;
+    }
+    .card {
+        background: #1e293b;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+    select, button {
+        padding: 10px;
+        border-radius: 6px;
+        border: none;
+        margin-right: 10px;
+    }
+    button {
+        cursor: pointer;
+        background: #38bdf8;
+        color: white;
+        font-weight: bold;
+    }
+    pre {
+        white-space: pre-wrap;
+        background: #0f1f33;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 15px;
+        overflow-x: auto;
+    }
+</style>
+</head>
+<body>
+
+<h1>ScaleX Analytics — API Tester</h1>
+
+<div class="card">
+    <label for="chartSelect">Select Chart:</label>
+    <select id="chartSelect">
+        <option value="channel_cpl_cac_roas">Channel-wise CPL · CAC · ROAS</option>
+        <option value="campaign_roi_bubble">Campaign ROI & Incremental ROAS</option>
+        <option value="channel_touchpoint_split">Touch-Point Revenue Split</option>
+        <option value="audience_roas">Audience Segment ROAS</option>
+        <option value="channel_lead_quality">Lead Quality Score by Channel</option>
+        <option value="channel_spend_efficiency">Spend Efficiency Index by Channel</option>
+        <option value="creative_perf_tiles">Creative Performance Tiles</option>
+        <option value="channel_snapshot_table">Channel Performance Snapshot Table</option>
+        <option value="lead_count">Lead Count</option>
+        <option value="sessions_by_channel">Sessions by Channel</option>
+        <option value="conversions_by_day">Conversions by Day</option>
+    </select>
+
+    <button onclick="callApi()">Run</button>
+</div>
+
+<div class="card">
+    <h3>Response</h3>
+    <pre id="responseBox">Click run to load data...</pre>
+</div>
+
+<script>
+const API_URL = "https://scalex-adapter-268453003438.europe-west1.run.app";
+
+function callApi() {
+    const chartName = document.getElementById("chartSelect").value;
+    const payload = {
+        chartName,
+        dateRange: {
+            startDate: "2025-12-01",
+            endDate: "2025-12-17"
+        },
+        comparison: false,
+        filters: {},
+        timestamp: new Date().toISOString()
+    };
+
+    document.getElementById("responseBox").textContent = "Loading...";
+
+    fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById("responseBox").textContent =
+            JSON.stringify(data, null, 2);
+    })
+    .catch(err => {
+        document.getElementById("responseBox").textContent =
+            "Error: " + err.toString();
+    });
+}
+</script>
+
+</body>
+</html>
